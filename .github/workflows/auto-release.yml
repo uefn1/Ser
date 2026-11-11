@@ -1,0 +1,48 @@
+name: Auto Release from Uploads
+
+on:
+  repository_dispatch:
+    types: [file_uploaded]
+
+jobs:
+  create-release:
+    runs-on: self-hosted
+    steps:
+      # 1. Alistからファイルをダウンロード
+      - name: Download file from Alist
+        run: |
+          FILE_PATH="${{ github.event.client_payload.file_path }}"
+          FILE_NAME="${{ github.event.client_payload.file_name }}"
+          wget -O "$FILE_NAME" "http://localhost:5244/dav/uploads/$FILE_PATH"
+
+          # ファイルが存在するか確認
+          if [ ! -f "$FILE_NAME" ]; then
+            echo "Error: Failed to download file"
+            exit 1
+          fi
+
+      # 2. 2GBを超えるファイルを圧縮 (GitHub Releaseの2GB制限回避)
+      - name: Compress large files
+        run: |
+          if [ $(stat -c%s "$FILE_NAME") -gt 2000000000 ]; then
+            echo "Compressing $FILE_NAME (size: $(du -h $FILE_NAME | cut -f1))"
+            tar -czvf "$FILE_NAME.tar.gz" "$FILE_NAME"
+            rm "$FILE_NAME"
+            FILE_NAME="$FILE_NAME.tar.gz"
+          fi
+
+      # 3. Releaseを作成 (1ジョブ = 1 Release)
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: "./$FILE_NAME"
+          name: "Release - ${{ github.event.client_payload.file_name }}"
+          tag_name: "v1.0.${{ github.run_number }}"
+          body: |
+            **Automatically created from uploaded file**
+            - File: ${{ github.event.client_payload.file_name }}
+            - Path: ${{ github.event.client_payload.file_path }}
+            - Uploaded at: ${{ github.event.head_commit.timestamp }}
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
